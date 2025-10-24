@@ -20,7 +20,7 @@ fn fail_on_empty_directory(name: &str) {
 fn faster_bindgen() {
     let bindings = bindgen::Builder::default()
         .header("FASTER/cc/src/core/faster-c.h")
-        .blacklist_type("max_align_t") // https://github.com/rust-lang-nursery/rust-bindgen/issues/550
+        .blocklist_type("max_align_t") // https://github.com/rust-lang-nursery/rust-bindgen/issues/550
         .ctypes_prefix("libc")
         .generate()
         .expect("unable to generate faster bindings");
