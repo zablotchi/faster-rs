@@ -46,6 +46,7 @@ fn main() {
                     "read_upsert_50_50",
                     "rmw_100",
                     "upsert_100",
+                    "read_100",
                 ])),
         )
         .subcommand(
@@ -93,11 +94,12 @@ fn main() {
             "read_upsert_50_50" => read_upsert5050,
             "rmw_100" => rmw_100,
             "upsert_100" => upsert_100,
-            _ => panic!("Unexpected workload specified. Options are: read_upsert_50_50, rmw_100"),
+            "read_100" => read_100,
+            _ => panic!("Unexpected workload specified. Options are: read_upsert_50_50, rmw_100, upsert_100, read_100"),
         };
 
         let table_size: u64 = 134217728;
-        let log_size: u64 = 17179869184;
+        let log_size: u64 = 137438953472;  // 128 GB
         let dir_path = String::from("/opt/tidehunter/faster-data");
         let store = Arc::new(FasterKvBuilder::new(table_size, log_size).with_disk(&dir_path).build().unwrap());
         let (load_keys, txn_keys) = load_files(load_keys_file, run_keys_file);

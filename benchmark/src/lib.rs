@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Barrier, Mutex};
 use std::time::{Duration, Instant};
 
-const K_CHECKPOINT_SECONDS: u64 = 30;
+const K_CHECKPOINT_SECONDS: u64 = 1;
 const K_COMPLETE_PENDING_INTERVAL: usize = 1600;
 const K_REFRESH_INTERVAL: usize = 64;
 const K_RUN_TIME: u64 = 30;
@@ -85,6 +85,10 @@ pub fn rmw_100(_key: usize) -> Operation {
 
 pub fn upsert_100(_key: usize) -> Operation {
     Operation::Upsert
+}
+
+pub fn read_100(_key: usize) -> Operation {
+    Operation::Read
 }
 
 pub fn load_files(load_file: &str, run_file: &str) -> (Vec<u64>, Vec<u64>) {
@@ -292,13 +296,13 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
         total_counts.3 += duration;
     }
 
-    println!(
-        "Finished benchmark: {} checkpoints, {} reads, {} writes, {} rmws. {} ops/second/thread",
-        num_checkpoints,
-        total_counts.0,
-        total_counts.1,
-        total_counts.2,
-        (total_counts.0 + total_counts.1 + total_counts.2)
-            / (total_counts.3 as usize / K_NANOS_PER_SECOND)
-    )
+    let total_ops = total_counts.0 + total_counts.1 + total_counts.2;
+    let total_throughput = total_ops as f64 / K_RUN_TIME as f64;
+    let per_thread_throughput = total_throughput / num_threads as f64;
+
+    println!("Finished benchmark: {} checkpoints completed", num_checkpoints);
+    println!("Total operations: {} ({} reads, {} writes, {} rmws)",
+             total_ops, total_counts.0, total_counts.1, total_counts.2);
+    println!("Total throughput: {:.2} ops/sec", total_throughput);
+    println!("Per-thread throughput: {:.2} ops/sec", per_thread_throughput);
 }
