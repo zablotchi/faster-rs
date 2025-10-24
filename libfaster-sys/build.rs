@@ -17,47 +17,10 @@ fn fail_on_empty_directory(name: &str) {
     }
 }
 
-/// Patch googletest download to use 'main' instead of 'master'
-fn patch_googletest_branch() {
-    let cmake_file = "FASTER/cc/CMakeLists.txt.in";
-    let content = fs::read_to_string(cmake_file)
-        .expect("Failed to read CMakeLists.txt.in");
-    
-    // Replace 'GIT_TAG master' with 'GIT_TAG main'
-    let patched = content.replace("GIT_TAG           master", "GIT_TAG           main");
-    
-    if content != patched {
-        println!("cargo:warning=Patching googletest branch: master -> main");
-        fs::write(cmake_file, patched)
-            .expect("Failed to write patched CMakeLists.txt.in");
-    }
-}
-
-/// Add missing #include <cstdint> for newer GCC versions
-fn patch_process_ycsb() {
-    let ycsb_file = "FASTER/cc/benchmark-dir/process_ycsb.cc";
-    let content = fs::read_to_string(ycsb_file)
-        .expect("Failed to read process_ycsb.cc");
-    
-    // Check if cstdint is already included
-    if !content.contains("#include <cstdint>") {
-        println!("cargo:warning=Patching process_ycsb.cc to add cstdint include");
-        
-        // Add after the last #include <...> in the first block
-        let patched = content.replace(
-            "#include <fcntl.h>",
-            "#include <fcntl.h>\n#include <cstdint>"
-        );
-        
-        fs::write(ycsb_file, patched)
-            .expect("Failed to write patched process_ycsb.cc");
-    }
-}
-
 fn faster_bindgen() {
     let bindings = bindgen::Builder::default()
         .header("FASTER/cc/src/core/faster-c.h")
-        .blocklist_type("max_align_t") // https://github.com/rust-lang-nursery/rust-bindgen/issues/550
+        .blacklist_type("max_align_t") // https://github.com/rust-lang-nursery/rust-bindgen/issues/550
         .ctypes_prefix("libc")
         .generate()
         .expect("unable to generate faster bindings");
@@ -74,10 +37,6 @@ fn main() {
     println!("cargo:rerun-if-changed=FASTER/");
 
     fail_on_empty_directory("FASTER");
-
-    // Apply patches to FASTER submodule before building
-    patch_googletest_branch();
-    patch_process_ycsb();
 
     faster_bindgen();
 
