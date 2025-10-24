@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 const K_CHECKPOINT_SECONDS: u64 = 30;
 const K_COMPLETE_PENDING_INTERVAL: usize = 1600;
 const K_REFRESH_INTERVAL: usize = 64;
-const K_RUN_TIME: u64 = 360;
+const K_RUN_TIME: u64 = 30;
 const K_CHUNK_SIZE: usize = 3200;
 const K_FILE_CHUNK_SIZE: usize = 131072;
 const K_INIT_COUNT: usize = 250000000;
@@ -33,10 +33,13 @@ pub enum Operation {
 }
 
 fn cpuset_for_core(topology: &Topology, idx: usize) -> CpuSet {
-    let cores = (*topology).objects_with_type(&ObjectType::Core).unwrap();
-    match cores.get(idx) {
+    // Try Core first, fall back to PU (Processing Unit) if not available
+    let objects = (*topology).objects_with_type(&ObjectType::Core)
+        .or_else(|_| (*topology).objects_with_type(&ObjectType::PU))
+        .unwrap();
+    match objects.get(idx) {
         Some(val) => val.cpuset().unwrap(),
-        None => panic!("No Core found with id {}", idx),
+        None => panic!("No Core/PU found with id {}", idx),
     }
 }
 
@@ -143,7 +146,6 @@ pub fn load_files(load_file: &str, run_file: &str) -> (Vec<u64>, Vec<u64>) {
 }
 
 pub fn populate_store(store: &Arc<FasterKv>, keys: &Arc<Vec<u64>>, num_threads: u8) {
-    let topo = Arc::new(Mutex::new(Topology::new()));
     let idx = Arc::new(AtomicUsize::new(0));
     let mut threads = vec![];
 
@@ -151,23 +153,15 @@ pub fn populate_store(store: &Arc<FasterKv>, keys: &Arc<Vec<u64>>, num_threads: 
         let store = Arc::clone(store);
         let idx = Arc::clone(&idx);
         let keys = Arc::clone(&keys);
-        let child_topo = topo.clone();
 
         threads.push(std::thread::spawn(move || {
-            {
-                // Bind thread to core
-                let tid = unsafe { libc::pthread_self() };
-                let mut locked_topo = child_topo.lock().unwrap();
-                let bind_to = cpuset_for_core(&*locked_topo, thread_idx as usize);
-                locked_topo
-                    .set_cpubind_for_thread(tid, bind_to, CPUBIND_THREAD)
-                    .unwrap();
-            }
+            // Thread pinning disabled for compatibility
 
             let _session = store.start_session();
             let mut chunk_idx = idx.fetch_add(K_CHUNK_SIZE, Ordering::SeqCst);
             while chunk_idx < K_INIT_COUNT {
-                for i in chunk_idx..(chunk_idx + K_CHUNK_SIZE) {
+                let end_idx = std::cmp::min(chunk_idx + K_CHUNK_SIZE, K_INIT_COUNT);
+                for i in chunk_idx..end_idx {
                     if i % K_REFRESH_INTERVAL == 0 {
                         store.refresh();
                         if i % K_COMPLETE_PENDING_INTERVAL == 0 {
@@ -193,7 +187,6 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
     num_threads: u8,
     op_allocator: F,
 ) {
-    let topo = Arc::new(Mutex::new(Topology::new()));
     let idx = Arc::new(AtomicUsize::new(0));
     let done = Arc::new(AtomicBool::new(false));
     let barrier = Arc::new(Barrier::new((num_threads + 1) as usize));
@@ -205,21 +198,12 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
         let idx = Arc::clone(&idx);
         let done = Arc::clone(&done);
         let barrier = Arc::clone(&barrier);
-        let topo = Arc::clone(&topo);
 
         threads.push(
             std::thread::Builder::new()
                 .stack_size(K_THREAD_STACK_SIZE)
                 .spawn(move || {
-                    {
-                        // Bind thread to core
-                        let tid = unsafe { libc::pthread_self() };
-                        let mut locked_topo = topo.lock().unwrap();
-                        let bind_to = cpuset_for_core(&*locked_topo, thread_id as usize);
-                        locked_topo
-                            .set_cpubind_for_thread(tid, bind_to, CPUBIND_THREAD)
-                            .unwrap();
-                    }
+                    // Thread pinning disabled for compatibility
 
                     let mut reads = 0;
                     let mut upserts = 0;
@@ -237,7 +221,8 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
                             }
                             chunk_idx = idx.fetch_add(K_CHUNK_SIZE, Ordering::SeqCst);
                         }
-                        for i in chunk_idx..(chunk_idx + K_CHUNK_SIZE) {
+                        let end_idx = std::cmp::min(chunk_idx + K_CHUNK_SIZE, K_TXN_COUNT);
+                        for i in chunk_idx..end_idx {
                             if i % K_REFRESH_INTERVAL == 0 {
                                 store.refresh();
                                 if i % K_COMPLETE_PENDING_INTERVAL == 0 {
