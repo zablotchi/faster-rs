@@ -1,17 +1,19 @@
-extern crate hwloc;
 extern crate libc;
 extern crate regex;
 
+mod types;
+
 use faster_rs::FasterKv;
-use hwloc::{CpuSet, ObjectType, Topology, CPUBIND_THREAD};
+use rand::Rng;
 use regex::Regex;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::prelude::FileExt;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier};
 use std::time::{Duration, Instant};
+use types::{BenchmarkKey, BenchmarkValue};
 
 const K_CHECKPOINT_SECONDS: u64 = 1;
 const K_COMPLETE_PENDING_INTERVAL: usize = 1600;
@@ -19,28 +21,24 @@ const K_REFRESH_INTERVAL: usize = 64;
 const K_RUN_TIME: u64 = 30;
 const K_CHUNK_SIZE: usize = 3200;
 const K_FILE_CHUNK_SIZE: usize = 131072;
-const K_INIT_COUNT: usize = 250000000;
-const K_TXN_COUNT: usize = 1000000000;
-
-const K_NANOS_PER_SECOND: usize = 1000000000;
+pub const K_INIT_COUNT: usize = 250000000;
+pub const K_TXN_COUNT: usize = 1000000000;
 
 const K_THREAD_STACK_SIZE: usize = 4 * 1024 * 1024;
+
+/// Calculate next power of two for a given number (matches C++ implementation)
+pub fn next_power_of_two(n: usize) -> u64 {
+    let mut power = 1u64;
+    while power < n as u64 {
+        power *= 2;
+    }
+    power
+}
 
 pub enum Operation {
     Read,
     Upsert,
     Rmw,
-}
-
-fn cpuset_for_core(topology: &Topology, idx: usize) -> CpuSet {
-    // Try Core first, fall back to PU (Processing Unit) if not available
-    let objects = (*topology).objects_with_type(&ObjectType::Core)
-        .or_else(|_| (*topology).objects_with_type(&ObjectType::PU))
-        .unwrap();
-    match objects.get(idx) {
-        Some(val) => val.cpuset().unwrap(),
-        None => panic!("No Core/PU found with id {}", idx),
-    }
 }
 
 pub fn process_ycsb(input_file: &str, output_file: &str) {
@@ -71,12 +69,18 @@ pub fn generate_sequential_keys(out_file: &str, workload: &str) {
     }
 }
 
-pub fn read_upsert5050(key: usize) -> Operation {
-    match key % 2 {
-        0 => Operation::Read,
-        1 => Operation::Upsert,
-        _ => panic!(),
+pub fn read_upsert5050(_key: usize) -> Operation {
+    thread_local! {
+        static RNG: std::cell::RefCell<rand::rngs::ThreadRng> = std::cell::RefCell::new(rand::thread_rng());
     }
+    RNG.with(|rng| {
+        let mut rng = rng.borrow_mut();
+        if rng.gen::<u8>() % 100 < 50 {
+            Operation::Read
+        } else {
+            Operation::Upsert
+        }
+    })
 }
 
 pub fn rmw_100(_key: usize) -> Operation {
@@ -153,7 +157,7 @@ pub fn populate_store(store: &Arc<FasterKv>, keys: &Arc<Vec<u64>>, num_threads: 
     let idx = Arc::new(AtomicUsize::new(0));
     let mut threads = vec![];
 
-    for thread_idx in 0..num_threads {
+    for _thread_idx in 0..num_threads {
         let store = Arc::clone(store);
         let idx = Arc::clone(&idx);
         let keys = Arc::clone(&keys);
@@ -172,7 +176,9 @@ pub fn populate_store(store: &Arc<FasterKv>, keys: &Arc<Vec<u64>>, num_threads: 
                             store.complete_pending(false);
                         }
                     }
-                    store.upsert(&*keys.get(i as usize).unwrap(), &42, i as u64);
+                    let key = BenchmarkKey::new(*keys.get(i as usize).unwrap());
+                    let value = BenchmarkValue::new(42);
+                    store.upsert(&key, &value, i as u64);
                 }
                 chunk_idx = idx.fetch_add(K_CHUNK_SIZE, Ordering::SeqCst);
             }
@@ -235,16 +241,21 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
                             }
                             match op_allocator(i) {
                                 Operation::Read => {
-                                    let (_, _): (u8, Receiver<i32>) =
-                                        store.read(&*keys.get(i).unwrap(), 1);
+                                    let key = BenchmarkKey::new(*keys.get(i).unwrap());
+                                    let (_, _): (u8, Receiver<BenchmarkValue>) =
+                                        store.read(&key, 1);
                                     reads += 1;
                                 }
                                 Operation::Upsert => {
-                                    store.upsert(&*keys.get(i).unwrap(), &42, 1);
+                                    let key = BenchmarkKey::new(*keys.get(i).unwrap());
+                                    let value = BenchmarkValue::new(42);
+                                    store.upsert(&key, &value, 1);
                                     upserts += 1;
                                 }
                                 Operation::Rmw => {
-                                    store.rmw(&*keys.get(i).unwrap(), &5, 1);
+                                    let key = BenchmarkKey::new(*keys.get(i).unwrap());
+                                    let modification = BenchmarkValue::new(5);
+                                    store.rmw(&key, &modification, 1);
                                     rmws += 1;
                                 }
                             }
@@ -273,14 +284,22 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
     barrier.wait();
     let start = Instant::now();
     let mut last_checkpoint = Instant::now();
-    let mut num_checkpoints = 0;
+    let mut checkpoints_attempted = 0;
+    let mut checkpoints_succeeded = 0;
 
     while Instant::now().duration_since(start).as_secs() < K_RUN_TIME {
         std::thread::sleep(Duration::from_secs(1));
         if Instant::now().duration_since(last_checkpoint).as_secs() > K_CHECKPOINT_SECONDS {
-            println!("Checkpointing...");
-            store.checkpoint();
-            num_checkpoints += 1;
+            println!("Starting checkpoint {}...", checkpoints_attempted);
+            checkpoints_attempted += 1;
+            match store.checkpoint() {
+                Ok(_) => {
+                    checkpoints_succeeded += 1;
+                }
+                Err(e) => {
+                    eprintln!("Checkpoint failed: {:?}", e);
+                }
+            }
             last_checkpoint = Instant::now();
         }
     }
@@ -300,7 +319,8 @@ pub fn run_benchmark<F: Fn(usize) -> Operation + Send + Copy + 'static>(
     let total_throughput = total_ops as f64 / K_RUN_TIME as f64;
     let per_thread_throughput = total_throughput / num_threads as f64;
 
-    println!("Finished benchmark: {} checkpoints completed", num_checkpoints);
+    println!("Finished benchmark: {} checkpoints completed ({} succeeded)",
+             checkpoints_attempted, checkpoints_succeeded);
     println!("Total operations: {} ({} reads, {} writes, {} rmws)",
              total_ops, total_counts.0, total_counts.1, total_counts.2);
     println!("Total throughput: {:.2} ops/sec", total_throughput);

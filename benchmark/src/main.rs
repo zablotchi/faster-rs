@@ -98,10 +98,18 @@ fn main() {
             _ => panic!("Unexpected workload specified. Options are: read_upsert_50_50, rmw_100, upsert_100, read_100"),
         };
 
-        let table_size: u64 = 134217728;
+        // Calculate table size dynamically: next power of 2 of (init_count / 2)
+        // This matches C++ benchmark.cc behavior
+        let table_size: u64 = next_power_of_two(K_INIT_COUNT / 2);
         let log_size: u64 = 137438953472;  // 128 GB
         let dir_path = String::from("/opt/tidehunter/faster-data");
-        let store = Arc::new(FasterKvBuilder::new(table_size, log_size).with_disk(&dir_path).build().unwrap());
+        let store = Arc::new(
+            FasterKvBuilder::new(table_size, log_size)
+                .with_disk(&dir_path)
+                .with_log_mutable_fraction(0.9)  // Match C++ default
+                .build()
+                .unwrap()
+        );
         let (load_keys, txn_keys) = load_files(load_keys_file, run_keys_file);
         let load_keys = Arc::new(load_keys);
         let txn_keys = Arc::new(txn_keys);
