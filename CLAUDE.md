@@ -15,7 +15,7 @@ sudo apt update
 sudo apt install -y g++-7 libaio-dev uuid-dev libtbb-dev
 ```
 
-**Critical**: Clone with submodules: `git clone --recurse-submodules`. The FASTER C++ library is a Git submodule at `libfaster-sys/FASTER/`.
+**Note**: The FASTER C++ library is automatically downloaded from https://github.com/zablotchi/FASTER.git during the first build. The build script will always pull the latest version from the `main` branch. To skip updates and use a cached version, set the environment variable `FASTER_NO_UPDATE=1`.
 
 ## Common Commands
 
@@ -84,11 +84,11 @@ cargo run --release -- run <load_keys> <run_keys>  # Run benchmark
 **`src/util.rs`**: `CheckPoint` and `Recover` utility structs
 
 **`libfaster-sys/build.rs`**: Critical build script that:
-1. Validates FASTER submodule exists
-2. Patches CMakeLists.txt for compatibility (googletest branch, cstdint includes)
-3. Runs bindgen on `FASTER/cc/src/core/faster-c.h`
-4. Compiles C++ FASTER library via CMake
-5. Links against static libfaster.a and system libraries (uuid, tbb, aio, stdc++fs)
+1. Automatically clones/updates FASTER C++ source from zablotchi/FASTER fork (main branch)
+2. Runs bindgen on `FASTER/cc/src/core/faster-c.h`
+3. Compiles C++ FASTER library via CMake
+4. Links against static libfaster.a and system libraries (uuid, tbb, aio, stdc++fs)
+5. Respects `FASTER_NO_UPDATE=1` environment variable to skip git pull (useful for offline builds)
 
 ### FFI Boundary Design
 
@@ -153,13 +153,26 @@ All operations (read, upsert, rmw, delete) require a **monotonic serial number**
 
 The build process is complex due to FFI:
 1. `libfaster-sys/build.rs` runs first (dependency)
-2. Applies patches to FASTER submodule for compatibility
+2. Automatically clones/updates FASTER C++ source from https://github.com/zablotchi/FASTER.git
 3. Generates Rust bindings with bindgen (v0.69)
 4. Compiles C++ with CMake (requires C++11)
 5. Main crate links against static library
 6. All FFI types live in `libfaster_sys::ffi` namespace
 
+**FASTER Source Management**:
+- First build: Clones FASTER from zablotchi fork (shallow clone, main branch)
+- Subsequent builds: Automatically runs `git pull` to get latest changes
+- Offline/pinned builds: Set `FASTER_NO_UPDATE=1` to skip git pull
+- Clean build: `rm -rf libfaster-sys/FASTER && cargo clean && cargo build`
+
+**Why the zablotchi fork?** The fork includes critical patches for modern toolchains:
+- C++17 compatibility (upgraded from C++14)
+- GoogleTest main branch support (was master)
+- Namespace fixes for C FFI
+- Benchmark enhancements with realistic key/value sizes
+
 If build fails, check:
-- Submodule is initialized: `git submodule update --init --recursive`
+- Network connectivity (for first build or updates)
 - System dependencies installed (g++-7, libaio-dev, uuid-dev, libtbb-dev)
+- Git is installed and accessible
 - CMake and bindgen versions compatible

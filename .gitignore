@@ -4,3 +4,6 @@ Cargo.lock
 target/
 *.rs.swp
 *.rs.swo
+
+# FASTER C++ source (downloaded at build time)
+libfaster-sys/FASTER/

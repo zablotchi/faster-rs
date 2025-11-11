@@ -18,7 +18,7 @@ $ apt update
 $ apt install -y g++-7 libaio-dev uuid-dev libtbb-dev
 ```
 
-*Make sure you clone the submodules as well*, this is best done by cloning with `git clone --recurse-submodules`.
+The FASTER C++ library is automatically downloaded during the build process from https://github.com/zablotchi/FASTER.git. The build will always use the latest version from the `main` branch. To skip automatic updates (useful for offline builds), set the environment variable: `FASTER_NO_UPDATE=1 cargo build`.
 
 ## The interface
 This wrapper attempts to remain true to the original FASTER design by exposing a similar interface to that which is provided by the original C++ version. Users may define their own Key-Value types and provide custom logic for Read-Modify-Write operations.

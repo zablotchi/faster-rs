@@ -2,18 +2,57 @@ extern crate bindgen;
 
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use cmake::Config;
 
-// Credit to: https://github.com/rust-rocksdb/rust-rocksdb/blob/master/librocksdb-sys/build.rs
-fn fail_on_empty_directory(name: &str) {
-    if fs::read_dir(name).unwrap().count() == 0 {
-        println!(
-            "The `{}` directory is empty, did you forget to pull the submodules?",
-            name
-        );
-        println!("Try `git submodule update --init --recursive`");
-        panic!();
+const FASTER_REPO_URL: &str = "https://github.com/zablotchi/FASTER.git";
+const FASTER_BRANCH: &str = "main";
+const FASTER_DIR: &str = "FASTER";
+
+/// Ensures FASTER source code is available by cloning or updating the repository
+fn ensure_faster_source() {
+    let faster_path = Path::new(FASTER_DIR);
+    let no_update = env::var("FASTER_NO_UPDATE").is_ok();
+
+    if !faster_path.exists() {
+        // Clone FASTER repository
+        println!("cargo:warning=FASTER source not found, cloning from {}", FASTER_REPO_URL);
+        let status = Command::new("git")
+            .args(&[
+                "clone",
+                "--depth", "1",
+                "--branch", FASTER_BRANCH,
+                FASTER_REPO_URL,
+                FASTER_DIR,
+            ])
+            .status()
+            .expect("Failed to execute git clone. Is git installed?");
+
+        if !status.success() {
+            panic!("Failed to clone FASTER repository from {}", FASTER_REPO_URL);
+        }
+        println!("cargo:warning=Successfully cloned FASTER repository");
+    } else if !no_update {
+        // Update existing FASTER repository to latest
+        println!("cargo:warning=Updating FASTER source to latest commit from {}", FASTER_BRANCH);
+        let status = Command::new("git")
+            .args(&["-C", FASTER_DIR, "pull", "origin", FASTER_BRANCH])
+            .status()
+            .expect("Failed to execute git pull");
+
+        if !status.success() {
+            println!("cargo:warning=Failed to update FASTER repository, using existing version");
+        } else {
+            println!("cargo:warning=Successfully updated FASTER repository");
+        }
+    } else {
+        println!("cargo:warning=FASTER_NO_UPDATE is set, skipping git pull");
+    }
+
+    // Verify directory is not empty
+    if fs::read_dir(FASTER_DIR).unwrap().count() == 0 {
+        panic!("The `{}` directory is empty after clone/update attempt", FASTER_DIR);
     }
 }
 
@@ -36,7 +75,7 @@ fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=FASTER/");
 
-    fail_on_empty_directory("FASTER");
+    ensure_faster_source();
 
     faster_bindgen();
 

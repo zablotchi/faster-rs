@@ -1,5 +1,0 @@
-[submodule "libfaster-sys/FASTER"]
-    path = libfaster-sys/FASTER
-    url = https://github.com/zablotchi/FASTER.git
-    branch = main
-
